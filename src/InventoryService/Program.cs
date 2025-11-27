@@ -1,0 +1,45 @@
+using MassTransit;
+using InventoryService;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Add services to the container
+builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+// Add MassTransit
+builder.Services.AddMassTransit(cfg =>
+{
+    cfg.AddConsumer<ReserveInventoryConsumer>();
+    cfg.AddConsumer<ReleaseInventoryConsumer>();
+
+    cfg.UsingInMemory((ctx, cfgBus) =>
+    {
+        cfgBus.ConfigureEndpoints(ctx);
+    });
+});
+
+// Add inventory tracking service
+builder.Services.AddSingleton<InventoryTrackingService>();
+
+var app = builder.Build();
+
+// Configure the HTTP request pipeline
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI(c =>
+    {
+        c.SwaggerEndpoint("/swagger/v1/swagger.json", "Inventory Service API v1");
+        c.RoutePrefix = "swagger";
+    });
+}
+
+app.UseAuthorization();
+app.MapControllers();
+
+app.Logger.LogInformation("📦 Inventory Service API started on http://localhost:5003");
+app.Logger.LogInformation("📖 Swagger UI available at http://localhost:5003/swagger");
+
+app.Run("http://localhost:5003");
