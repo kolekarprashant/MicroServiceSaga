@@ -8,7 +8,7 @@ on:
 
 permissions:
   contents: read
-
+  
 env:
   DOTNET_VERSION: "8.0"
 
@@ -21,7 +21,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Setup .NET
+      - name: Setup .NET App
         uses: actions/setup-dotnet@v3
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
@@ -58,6 +58,15 @@ jobs:
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Create ECR repositories if they don't exist
+        env:
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          for repo in saga-orchestrator order-service payment-service inventory-service; do
+            aws ecr describe-repositories --repository-names $repo --region $AWS_REGION 2>/dev/null || \
+            aws ecr create-repository --repository-name $repo --region $AWS_REGION
+          done
 
       - name: Build, tag, and push images to Amazon ECR
         env:
