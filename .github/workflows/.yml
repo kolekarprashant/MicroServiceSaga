@@ -28,13 +28,13 @@ jobs:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Restore dependencies
-        run: dotnet restore
+        run: dotnet restore MassTransitSagaDemo.sln
 
       - name: Build
-        run: dotnet build --no-restore --configuration Release
+        run: dotnet build MassTransitSagaDemo.sln --no-restore --configuration Release
 
       - name: Test
-        run: dotnet test --no-build --verbosity normal
+        run: dotnet test MassTransitSagaDemo.sln --no-build --configuration Release --verbosity normal
 
       - name: Set Image Tag
         id: set-tag
