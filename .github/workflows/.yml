@@ -60,10 +60,23 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
 
-      - name: Build, tag, and push image to Amazon ECR
+      - name: Build, tag, and push images to Amazon ECR
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ needs.build-and-test.outputs.image-tag }}
         run: |
-          docker build -t $ECR_REGISTRY/orderrepo:$IMAGE_TAG .
-          docker push $ECR_REGISTRY/orderrepo:$IMAGE_TAG
+          # Build and push SagaOrchestrator
+          docker build -f Dockerfile.SagaOrchestrator -t $ECR_REGISTRY/saga-orchestrator:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/saga-orchestrator:$IMAGE_TAG
+          
+          # Build and push OrderService
+          docker build -f Dockerfile.OrderService -t $ECR_REGISTRY/order-service:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/order-service:$IMAGE_TAG
+          
+          # Build and push PaymentService
+          docker build -f Dockerfile.PaymentService -t $ECR_REGISTRY/payment-service:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/payment-service:$IMAGE_TAG
+          
+          # Build and push InventoryService
+          docker build -f Dockerfile.InventoryService -t $ECR_REGISTRY/inventory-service:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/inventory-service:$IMAGE_TAG
