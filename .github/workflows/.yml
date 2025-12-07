@@ -1,0 +1,112 @@
+name: CI CD (.NET 8 → ECR → EC2 docker compose)
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  DOTNET_VERSION: "8.0"
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.set-tag.outputs.IMAGE_TAG }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --no-restore --configuration Release
+
+      - name: Run unit tests
+        run: dotnet test --no-build --verbosity normal
+
+      - name: Set image tag
+        id: set-tag
+        run: |
+          TAG=latest
+          echo "IMAGE_TAG=$TAG" >> $GITHUB_OUTPUT
+
+  push-image-to-ecr:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login to AWS ECR
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          region: ${{ secrets.AWS_REGION }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Build & push Docker image to ECR
+        env:
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+        run: |
+          IMAGE="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:latest"
+          docker build -t $IMAGE .
+          docker push $IMAGE
+
+  deploy-to-ec2:
+    needs: push-image-to-ecr
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          # optional known hosts
+          if [ -n "${{ secrets.EC2_SSH_KNOWN_HOSTS }}" ]; then
+            echo "${{ secrets.EC2_SSH_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+          fi
+
+      - name: Copy docker-compose.yml to EC2
+        run: |
+          scp -o StrictHostKeyChecking=yes docker-compose.yml ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:~/docker-compose.yml
+
+      - name: SSH and run docker compose pull & up
+        run: |
+          ssh -o StrictHostKeyChecking=yes ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'SSH_EOF'
+            set -eux
+            cd ~
+            # login to ECR
+            aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+            # pull and run
+            docker compose pull
+            docker compose up -d --remove-orphans
+            # Optional: prune old images
+            docker image prune -af
+          SSH_EOF
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}

@@ -1,380 +1,123 @@
-# SAGA PATTERN - ARCHITECTURE DIAGRAM
+# Architecture Overview
 
-## System Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                            CLIENT APPLICATION                            │
-│                              (Program.cs)                                │
-└────────────────────────────────┬────────────────────────────────────────┘
-                                 │
-                                 ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         SAGA ORCHESTRATOR                                │
-│                     (SagaOrchestrator.cs)                               │
-│                                                                          │
-│  - Coordinates transaction flow                                         │
-│  - Manages saga state                                                    │
-│  - Handles compensation logic                                           │
-│  - Tracks executed and compensated steps                                │
-└────────┬─────────────────────┬─────────────────────┬────────────────────┘
-         │                     │                     │
-         ▼                     ▼                     ▼
-┌────────────────┐    ┌────────────────┐    ┌────────────────────┐
-│ ORDER SERVICE  │    │ INVENTORY SVC  │    │  PAYMENT SERVICE   │
-│                │    │                │    │                    │
-│ - CreateOrder  │    │ - ReserveStock │    │ - ProcessPayment   │
-│ - ConfirmOrder │    │ - ReleaseStock │    │ - RefundPayment    │
-│ - CancelOrder  │    │ - ConfirmResvn │    │ - GetBalance       │
-└────────┬───────┘    └────────┬───────┘    └─────────┬──────────┘
-         │                     │                       │
-         ▼                     ▼                       ▼
-┌────────────────┐    ┌────────────────┐    ┌────────────────────┐
-│  Order Store   │    │ Inventory Store│    │   Payment Store    │
-│ (In-Memory)    │    │  (In-Memory)   │    │   (In-Memory)      │
-└────────────────┘    └────────────────┘    └────────────────────┘
-```
-
-## Transaction Flow
-
-### SUCCESSFUL TRANSACTION PATH
+## Service Communication Flow
 
 ```
-START
-  │
-  ├─► [1] Create Order
-  │    ├─ OrderService.CreateOrder()
-  │    └─ State: OrderCreated ✓
-  │
-  ├─► [2] Reserve Inventory
-  │    ├─ InventoryService.ReserveStock()
-  │    └─ State: InventoryReserved ✓
-  │
-  ├─► [3] Process Payment
-  │    ├─ PaymentService.ProcessPayment()
-  │    └─ State: PaymentProcessed ✓
-  │
-  ├─► [4] Confirm Transaction
-  │    ├─ OrderService.ConfirmOrder()
-  │    ├─ InventoryService.ConfirmReservation()
-  │    └─ State: Completed ✓
-  │
-SUCCESS
+┌─────────────────┐
+│  Order Service  │ Initiates orders every 10s
+└────────┬────────┘
+         │ SubmitOrder
+         ▼
+┌─────────────────────────────────────────────────┐
+│         Saga Orchestrator (State Machine)       │
+│  States: Submitted → InventoryReserved →        │
+│          Completed / Failed                     │
+└──────┬──────────────────────────────────┬───────┘
+       │                                  │
+       │ ReserveInventory                │ ProcessPayment
+       ▼                                  ▼
+┌──────────────────┐              ┌──────────────────┐
+│ Inventory Service│              │  Payment Service │
+│                  │              │                  │
+│ • Reserve        │              │ • Process        │
+│ • Release (comp) │              │ • Simulate fail  │
+└──────┬───────────┘              └──────┬───────────┘
+       │                                  │
+       │ InventoryReserved               │ PaymentProcessed
+       │ InventoryReleased               │ PaymentFailed
+       │                                  │
+       └──────────────┬───────────────────┘
+                      ▼
+              ┌───────────────┐
+              │     Events     │
+              │                │
+              │ OrderCompleted │
+              │ OrderFailed    │
+              └───────┬────────┘
+                      │
+                      ▼
+              ┌──────────────────┐
+              │  Order Service   │ (receives final status)
+              └──────────────────┘
 ```
 
-### FAILED TRANSACTION PATH (With Compensation)
+## Message Contracts
 
-```
-START
-  │
-  ├─► [1] Create Order
-  │    ├─ OrderService.CreateOrder()
-  │    └─ State: OrderCreated ✓
-  │
-  ├─► [2] Reserve Inventory
-  │    ├─ InventoryService.ReserveStock()
-  │    └─ State: InventoryReserved ✓
-  │
-  ├─► [3] Process Payment
-  │    ├─ PaymentService.ProcessPayment()
-  │    └─ State: Failed ✗
-  │
-  ├─► COMPENSATION (Reverse Order)
-  │    │
-  │    ├─► [3] Compensate Payment (N/A - didn't succeed)
-  │    │
-  │    ├─► [2] Compensate Inventory
-  │    │    ├─ InventoryService.ReleaseReservation()
-  │    │    └─ State: InventoryReleased ✓
-  │    │
-  │    └─► [1] Compensate Order
-  │         ├─ OrderService.CancelOrder()
-  │         └─ State: OrderCancelled ✓
-  │
-COMPENSATED (System returned to consistent state)
-```
+All services share the same message contracts from `MassTransit.Messages`:
 
-## Data Models Relationship
+### Commands (Sent to specific services)
+- `SubmitOrder` → Triggers the saga
+- `ReserveInventory` → Sent to Inventory Service
+- `ProcessPayment` → Sent to Payment Service
+- `ReleaseInventory` → Compensation command to Inventory Service
 
-```
-┌──────────────────┐
-│  SagaTransaction │
-│                  │
-│  - TransactionId │◄────────────┐
-│  - OrderId       │─────┐       │
-│  - PaymentId     │──┐  │       │
-│  - ReservationId │─┐│  │       │
-│  - State         │ ││  │       │
-│  - ExecutedSteps │ ││  │       │
-└──────────────────┘ ││  │       │
-                     ││  │       │
-         ┌───────────┘│  │       │
-         │   ┌────────┘  │       │
-         │   │  ┌────────┘       │
-         │   │  │                │
-         ▼   ▼  ▼                │
-    ┌─────────────┐              │
-    │   Payment   │              │
-    │             │              │
-    │ - PaymentId │              │
-    │ - OrderId   │──────┐       │
-    │ - Amount    │      │       │
-    │ - Status    │      │       │
-    └─────────────┘      │       │
-                         ▼       │
-                    ┌─────────┐  │
-                    │  Order  │  │
-                    │         │  │
-                    │ - OrderId│ │
-                    │ - ProductId│─┐
-                    │ - Status │  │
-                    └─────────┘  │
-                                 │
-                                 ▼
-                    ┌──────────────────────┐
-                    │ InventoryReservation │
-                    │                      │
-                    │ - ReservationId      │
-                    │ - OrderId            │
-                    │ - ProductId          │
-                    │ - Quantity           │
-                    │ - Status             │
-                    └──────────────────────┘
-```
+### Events (Published to all interested services)
+- `InventoryReserved` → Published by Inventory Service
+- `PaymentProcessed` → Published by Payment Service (success)
+- `PaymentFailed` → Published by Payment Service (failure)
+- `InventoryReleased` → Published by Inventory Service (compensation)
+- `OrderCompleted` → Published by Saga (final success)
+- `OrderFailed` → Published by Saga (final failure)
 
-## State Transitions
-
-### Saga State Machine
-
-```
-                    ┌─────────┐
-                    │ Started │
-                    └────┬────┘
-                         │
-                         ▼
-                  ┌──────────────┐
-             ┌────│ OrderCreated │
-             │    └──────┬───────┘
-             │           │
-             │           ▼
-             │    ┌──────────────────┐
-             ├────│ InventoryReserved│
-             │    └──────┬───────────┘
-             │           │
-             │           ▼
-             │    ┌──────────────────┐
-             ├────│ PaymentProcessed │
-             │    └──────┬───────────┘
-             │           │
-             │           ▼
-             │    ┌───────────┐
-             │    │ Completed │
-             │    └───────────┘
-             │
-             │ (If any step fails)
-             │
-             ▼
-      ┌────────────┐
-      │   Failed   │
-      └─────┬──────┘
-            │
-            ▼
-      ┌──────────────┐
-      │ Compensating │
-      └─────┬────────┘
-            │
-            ▼
-      ┌──────────────┐
-      │ Compensated  │
-      └──────────────┘
-```
-
-### Order Status Transitions
+## State Machine (Saga Orchestrator)
 
 ```
 ┌─────────┐
-│ Pending │
+│ Initial │
 └────┬────┘
-     │
-     ├─► Success Path ──────► ┌───────────┐
-     │                        │ Confirmed │
-     │                        └───────────┘
-     │
-     └─► Failure Path ──────► ┌───────────┐
-                              │ Cancelled │
-                              └───────────┘
-                                    or
-                              ┌───────────┐
-                              │  Failed   │
-                              └───────────┘
-```
-
-### Payment Status Transitions
-
-```
-┌─────────┐
-│ Pending │
-└────┬────┘
-     │
-     ├─► Success ──────► ┌─────────┐
-     │                   │ Success │──► Refund ──► ┌──────────┐
-     │                   └─────────┘               │ Refunded │
-     │                                             └──────────┘
-     └─► Failure ──────► ┌────────┐
-                         │ Failed │
-                         └────────┘
-```
-
-### Inventory Status Transitions
-
-```
-┌───────────┐
-│ Available │
-└─────┬─────┘
-      │
-      ▼
-┌──────────┐    Confirm    ┌──────┐
-│ Reserved │──────────────►│ Sold │
-└────┬─────┘                └──────┘
-     │
-     │ Release
+     │ SubmitOrder
      ▼
-┌───────────┐
-│ Released  │
-└───────────┘
+┌──────────┐
+│Submitted │
+└────┬─────┘
+     │ InventoryReserved
+     ▼
+┌───────────────────┐
+│InventoryReserved  │
+└────┬──────────────┘
+     │
+     ├─ PaymentProcessed ──────┐
+     │                         ▼
+     │                    ┌──────────┐
+     │                    │Completed │
+     │                    └──────────┘
+     │
+     └─ PaymentFailed ──────────┐
+                                ▼
+                           ┌────────┐
+                           │ Failed │ (+ Compensation)
+                           └────────┘
 ```
 
-## Error Handling Strategy
+## Compensation Logic
 
-```
-┌────────────────────────────────────────────────────────────┐
-│                    Try Execute Step                        │
-│                                                             │
-│  ┌──────────────────────────────────────────────────┐     │
-│  │  Step Succeeds?                                   │     │
-│  │                                                    │     │
-│  │  YES ──► Add to ExecutedSteps ──► Continue       │     │
-│  │   │                                               │     │
-│  │  NO                                               │     │
-│  │   │                                               │     │
-│  │   └──► Set ErrorMessage ──► Start Compensation   │     │
-│  │                                                    │     │
-│  └────────────────────────────────────────────────────┘   │
-│                                                             │
-│                         │                                  │
-│                         ▼                                  │
-│            ┌──────────────────────────┐                   │
-│            │  Compensation Process     │                   │
-│            │                          │                   │
-│            │  For each ExecutedStep   │                   │
-│            │    (in reverse order)    │                   │
-│            │                          │                   │
-│            │  Execute Compensation    │                   │
-│            │  Add to CompensatedSteps │                   │
-│            └──────────────────────────┘                   │
-└────────────────────────────────────────────────────────────┘
-```
+When payment fails, the saga automatically executes compensation:
 
-## Thread Safety
+1. **PaymentFailed** event received
+2. Saga transitions to **Failed** state
+3. Saga publishes **ReleaseInventory** (compensation)
+4. Inventory Service releases the reserved inventory
+5. Inventory Service publishes **InventoryReleased**
+6. Saga publishes **OrderFailed** to Order Service
 
-All services implement thread-safe operations using locks:
+## Running the Demo
 
-```
-┌─────────────────────────────────────────┐
-│          Service Method Call            │
-└──────────────────┬──────────────────────┘
-                   │
-                   ▼
-        ┌──────────────────────┐
-        │   Acquire Lock       │
-        │   lock(_lock)        │
-        └──────────┬───────────┘
-                   │
-                   ▼
-        ┌──────────────────────┐
-        │  Critical Section    │
-        │  - Read Data         │
-        │  - Modify Data       │
-        │  - Write Data        │
-        └──────────┬───────────┘
-                   │
-                   ▼
-        ┌──────────────────────┐
-        │   Release Lock       │
-        │   (automatic)        │
-        └──────────────────────┘
-```
+1. Start all services (use `run-all-services.ps1`)
+2. Watch the Order Service submit orders every 10 seconds
+3. Observe successful flows (green checkmarks ✅)
+4. Observe failed flows with compensation (red X ❌)
 
-## Performance Flow
+## Key Patterns Demonstrated
 
-```
-Time ──────────────────────────────────────────────────►
+1. **Saga Orchestration** - Central coordinator pattern
+2. **Compensation** - Automatic rollback on failure
+3. **Event-Driven Architecture** - Services communicate via events
+4. **Service Independence** - Each service is autonomous
+5. **State Management** - Saga maintains workflow state
 
-Step 1: Create Order          [====]
-Step 2: Reserve Inventory           [====]
-Step 3: Process Payment (500ms)           [========]
-Step 4: Confirm                                   [====]
+## Technology Stack
 
-Total Time: ~1-2 seconds (including delays)
-```
-
-With Compensation (on failure):
-
-```
-Time ──────────────────────────────────────────────────►
-
-Step 1: Create Order          [====]
-Step 2: Reserve Inventory           [====]
-Step 3: Process Payment (FAIL)            [====] ✗
-
-Compensation Phase:
-  Refund Payment (if needed)                  [==]
-  Release Inventory (200ms)                      [====]
-  Cancel Order (200ms)                              [====]
-
-Total Time: ~1-2 seconds (including delays)
-```
-
-## Deployment Architecture
-
-```
-┌──────────────────────────────────────────────────────────┐
-│                    Production Deployment                  │
-└──────────────────────────────────────────────────────────┘
-
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   Order     │     │  Inventory  │     │   Payment   │
-│  Service    │     │   Service   │     │   Service   │
-│             │     │             │     │             │
-│  + DB       │     │  + DB       │     │  + DB       │
-│  + Queue    │     │  + Queue    │     │  + Queue    │
-└──────┬──────┘     └──────┬──────┘     └──────┬──────┘
-       │                   │                    │
-       └───────────────────┼────────────────────┘
-                          │
-                          ▼
-                ┌─────────────────┐
-                │     Message     │
-                │      Bus        │
-                │  (RabbitMQ /    │
-                │   Kafka)        │
-                └─────────────────┘
-                          │
-                          ▼
-                ┌─────────────────┐
-                │      Saga       │
-                │  Orchestrator   │
-                │                 │
-                │  + State Store  │
-                │  + Event Log    │
-                └─────────────────┘
-```
-
----
-
-This architecture ensures:
-✓ Loose coupling between services
-✓ Independent scalability
-✓ Fault tolerance
-✓ Data consistency through compensation
-✓ Clear separation of concerns
+- **MassTransit 8.2.3** - Message bus abstraction
+- **.NET 8** - Runtime
+- **In-Memory Transport** - For demo (replace with RabbitMQ/Azure Service Bus in production)
+- **In-Memory Saga Repository** - For demo (replace with SQL/MongoDB in production)

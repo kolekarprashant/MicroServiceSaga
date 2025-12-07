@@ -1,0 +1,32 @@
+# Inventory Service Dockerfile
+FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS base
+WORKDIR /app
+EXPOSE 5003
+
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+
+# Copy shared messages library
+COPY ["src/MassTransit.Messages/MassTransit.Messages.csproj", "src/MassTransit.Messages/"]
+
+# Copy inventory service project
+COPY ["src/InventoryService/InventoryService.csproj", "src/InventoryService/"]
+
+# Restore dependencies
+RUN dotnet restore "src/InventoryService/InventoryService.csproj"
+
+# Copy source code
+COPY ["src/MassTransit.Messages/", "src/MassTransit.Messages/"]
+COPY ["src/InventoryService/", "src/InventoryService/"]
+
+# Build
+WORKDIR "/src/src/InventoryService"
+RUN dotnet build "InventoryService.csproj" -c Release -o /app/build
+
+FROM build AS publish
+RUN dotnet publish "InventoryService.csproj" -c Release -o /app/publish /p:UseAppHost=false
+
+FROM base AS final
+WORKDIR /app
+COPY --from=publish /app/publish .
+ENTRYPOINT ["dotnet", "InventoryService.dll"]
