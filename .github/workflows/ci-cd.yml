@@ -116,9 +116,15 @@ jobs:
           IMAGE_TAG: ${{ needs.push-image-to-ecr.outputs.image-tag }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
         run: |
-          # Create SSH key file
-          echo "$EC2_SSH_KEY" > ec2_key.pem
+          # Create SSH key file with proper formatting
+          echo "$EC2_SSH_KEY" | tr -d '\r' > ec2_key.pem
           chmod 600 ec2_key.pem
+          
+          # Validate SSH key format
+          ssh-keygen -y -f ec2_key.pem > /dev/null 2>&1 || {
+            echo "Error: Invalid SSH key format"
+            exit 1
+          }
           
           # Copy docker-compose file to EC2
           scp -i ec2_key.pem -o StrictHostKeyChecking=no docker-compose.yml $EC2_USER@$EC2_HOST:~/
