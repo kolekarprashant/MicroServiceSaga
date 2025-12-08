@@ -92,6 +92,9 @@ jobs:
   deploy-to-ec2:
     needs: push-image-to-ecr
     runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: http://${{ secrets.EC2_HOST }}:5000
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
