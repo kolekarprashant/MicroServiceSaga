@@ -89,72 +89,72 @@ jobs:
           docker build -f Dockerfile.InventoryService -t $ECR_REGISTRY/inventory-service:$IMAGE_TAG .
           docker push $ECR_REGISTRY/inventory-service:$IMAGE_TAG
 
-  deploy-to-ec2:
-    needs: push-image-to-ecr
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+  # deploy-to-ec2:
+  #   needs: push-image-to-ecr
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Checkout code
+  #       uses: actions/checkout@v3
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+  #     - name: Configure AWS credentials
+  #       uses: aws-actions/configure-aws-credentials@v2
+  #       with:
+  #         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  #         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  #         aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v1
+  #     - name: Login to Amazon ECR
+  #       id: login-ecr
+  #       uses: aws-actions/amazon-ecr-login@v1
 
-      - name: Deploy to EC2
-        env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_USER: ${{ secrets.EC2_USER }}
-          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ needs.push-image-to-ecr.outputs.image-tag }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-        run: |
-          # Create SSH key file with proper formatting
-          printf '%s\n' "$EC2_SSH_KEY" > ec2_key.pem
-          chmod 600 ec2_key.pem
+  #     - name: Deploy to EC2
+  #       env:
+  #         EC2_HOST: ${{ secrets.EC2_HOST }}
+  #         EC2_USER: ${{ secrets.EC2_USER }}
+  #         EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+  #         ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+  #         IMAGE_TAG: ${{ needs.push-image-to-ecr.outputs.image-tag }}
+  #         AWS_REGION: ${{ secrets.AWS_REGION }}
+  #       run: |
+  #         # Create SSH key file with proper formatting
+  #         printf '%s\n' "$EC2_SSH_KEY" > ec2_key.pem
+  #         chmod 600 ec2_key.pem
           
-          # Debug: Show key format (first and last line only for security)
-          echo "SSH Key format check:"
-          head -n1 ec2_key.pem
-          tail -n1 ec2_key.pem
+  #         # Debug: Show key format (first and last line only for security)
+  #         echo "SSH Key format check:"
+  #         head -n1 ec2_key.pem
+  #         tail -n1 ec2_key.pem
           
-          # Try to validate - if it fails, continue anyway (some formats work without validation)
-          ssh-keygen -y -f ec2_key.pem > /dev/null 2>&1 && echo "Key validation: OK" || echo "Key validation: Skipped (will try connection)"
+  #         # Try to validate - if it fails, continue anyway (some formats work without validation)
+  #         ssh-keygen -y -f ec2_key.pem > /dev/null 2>&1 && echo "Key validation: OK" || echo "Key validation: Skipped (will try connection)"
           
-          # Copy docker-compose file to EC2
-          scp -i ec2_key.pem -o StrictHostKeyChecking=no docker-compose.yml $EC2_USER@$EC2_HOST:~/
+  #         # Copy docker-compose file to EC2
+  #         scp -i ec2_key.pem -o StrictHostKeyChecking=no docker-compose.yml $EC2_USER@$EC2_HOST:~/
           
-          # Get ECR login password locally and pass to EC2
-          ECR_PASSWORD=$(aws ecr get-login-password --region $AWS_REGION)
+  #         # Get ECR login password locally and pass to EC2
+  #         ECR_PASSWORD=$(aws ecr get-login-password --region $AWS_REGION)
           
-          # Deploy on EC2
-          ssh -i ec2_key.pem -o StrictHostKeyChecking=no $EC2_USER@$EC2_HOST << EOF
-            # Login to ECR using password from GitHub Actions
-            echo "$ECR_PASSWORD" | docker login --username AWS --password-stdin $ECR_REGISTRY
+  #         # Deploy on EC2
+  #         ssh -i ec2_key.pem -o StrictHostKeyChecking=no $EC2_USER@$EC2_HOST << EOF
+  #           # Login to ECR using password from GitHub Actions
+  #           echo "$ECR_PASSWORD" | docker login --username AWS --password-stdin $ECR_REGISTRY
             
-            # Export environment variables for docker-compose
-            export ECR_REGISTRY=$ECR_REGISTRY
-            export IMAGE_TAG=$IMAGE_TAG
+  #           # Export environment variables for docker-compose
+  #           export ECR_REGISTRY=$ECR_REGISTRY
+  #           export IMAGE_TAG=$IMAGE_TAG
             
-            # Pull latest images
-            docker-compose pull
+  #           # Pull latest images
+  #           docker-compose pull
             
-            # Stop and remove old containers
-            docker-compose down
+  #           # Stop and remove old containers
+  #           docker-compose down
             
-            # Start new containers
-            docker-compose up -d
+  #           # Start new containers
+  #           docker-compose up -d
             
-            # Clean up unused images
-            docker image prune -af
-          EOF
+  #           # Clean up unused images
+  #           docker image prune -af
+  #         EOF
           
-          # Clean up SSH key
-          rm -f ec2_key.pem
+  #         # Clean up SSH key
+  #         rm -f ec2_key.pem
