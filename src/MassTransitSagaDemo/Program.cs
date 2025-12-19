@@ -27,20 +27,23 @@ builder.Services.AddMassTransit(cfg =>
 var app = builder.Build();
 
 // Configure the HTTP request pipeline
-if (app.Environment.IsDevelopment())
+app.UseSwagger();
+app.UseSwaggerUI(c =>
 {
-    app.UseSwagger();
-    app.UseSwaggerUI(c =>
-    {
-        c.SwaggerEndpoint("/swagger/v1/swagger.json", "Saga Orchestrator API v1");
-        c.RoutePrefix = "swagger";
-    });
-}
+    c.SwaggerEndpoint("/swagger/v1/swagger.json", "Saga Orchestrator API v1");
+    c.RoutePrefix = "swagger";
+});
 
 app.UseAuthorization();
 app.MapControllers();
 
-app.Logger.LogInformation("🎯 Saga Orchestrator API started on http://localhost:5000");
+var port = Environment.GetEnvironmentVariable("PORT") ?? "5000";
+var urls = $"http://0.0.0.0:{port}";
+
+app.Logger.LogInformation("⚙️ Saga Orchestrator API starting on {Urls}", urls);
+app.Logger.LogInformation("📖 Swagger UI available at {Urls}/swagger", urls);
+
+app.Run(urls);
 app.Logger.LogInformation("📖 Swagger UI available at http://localhost:5000/swagger");
 
 app.Run("http://localhost:5000");

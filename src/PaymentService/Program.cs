@@ -25,20 +25,23 @@ builder.Services.AddSingleton<PaymentTrackingService>();
 var app = builder.Build();
 
 // Configure the HTTP request pipeline
-if (app.Environment.IsDevelopment())
+app.UseSwagger();
+app.UseSwaggerUI(c =>
 {
-    app.UseSwagger();
-    app.UseSwaggerUI(c =>
-    {
-        c.SwaggerEndpoint("/swagger/v1/swagger.json", "Payment Service API v1");
-        c.RoutePrefix = "swagger";
-    });
-}
+    c.SwaggerEndpoint("/swagger/v1/swagger.json", "Payment Service API v1");
+    c.RoutePrefix = "swagger";
+});
 
 app.UseAuthorization();
 app.MapControllers();
 
-app.Logger.LogInformation("💳 Payment Service API started on http://localhost:5002");
+var port = Environment.GetEnvironmentVariable("PORT") ?? "5002";
+var urls = $"http://0.0.0.0:{port}";
+
+app.Logger.LogInformation("💳 Payment Service API starting on {Urls}", urls);
+app.Logger.LogInformation("📖 Swagger UI available at {Urls}/swagger", urls);
+
+app.Run(urls);
 app.Logger.LogInformation("📖 Swagger UI available at http://localhost:5002/swagger");
 
 app.Run("http://localhost:5002");
